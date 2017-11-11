@@ -24,7 +24,7 @@ var _ = Describe("Client", func() {
 		packetConn *mockPacketConn
 		addr       net.Addr
 
-		originalClientSessConstructor func(conn connection, hostname string, v protocol.VersionNumber, connectionID protocol.ConnectionID, tlsConf *tls.Config, config *Config, initialVersion protocol.VersionNumber, negotiatedVersions []protocol.VersionNumber) (packetHandler, <-chan handshakeEvent, error)
+		originalClientSessConstructor func(conn connection, hostname string, v protocol.VersionNumber, connectionID protocol.ConnectionID, tlsConf *tls.Config, config *Config, initialVersion protocol.VersionNumber, negotiatedVersions []protocol.VersionNumber) (packetHandler, error)
 	)
 
 	// generate a packet sent by the server that accepts the QUIC version suggested by the client
@@ -42,7 +42,7 @@ var _ = Describe("Client", func() {
 	BeforeEach(func() {
 		originalClientSessConstructor = newClientSession
 		Eventually(areSessionsRunning).Should(BeFalse())
-		msess, _, _ := newMockSession(nil, 0, 0, nil, nil, nil)
+		msess, _ := newMockSession(nil, 0, 0, nil, nil, nil)
 		sess = msess.(*mockSession)
 		addr = &net.UDPAddr{IP: net.IPv4(192, 168, 100, 200), Port: 1337}
 		packetConn = &mockPacketConn{
@@ -86,9 +86,9 @@ var _ = Describe("Client", func() {
 				_ *Config,
 				_ protocol.VersionNumber,
 				_ []protocol.VersionNumber,
-			) (packetHandler, <-chan handshakeEvent, error) {
+			) (packetHandler, error) {
 				Expect(conn.Write([]byte("fake CHLO"))).To(Succeed())
-				return sess, sess.handshakeChan, nil
+				return sess, nil
 			}
 			origGenerateConnectionID = generateConnectionID
 			generateConnectionID = func() (protocol.ConnectionID, error) {
@@ -176,9 +176,9 @@ var _ = Describe("Client", func() {
 				_ *Config,
 				_ protocol.VersionNumber,
 				_ []protocol.VersionNumber,
-			) (packetHandler, <-chan handshakeEvent, error) {
+			) (packetHandler, error) {
 				remoteAddrChan <- conn.RemoteAddr().String()
-				return sess, nil, nil
+				return sess, nil
 			}
 			dialed := make(chan struct{})
 			go func() {
@@ -203,9 +203,9 @@ var _ = Describe("Client", func() {
 				_ *Config,
 				_ protocol.VersionNumber,
 				_ []protocol.VersionNumber,
-			) (packetHandler, <-chan handshakeEvent, error) {
+			) (packetHandler, error) {
 				hostnameChan <- h
-				return sess, nil, nil
+				return sess, nil
 			}
 			dialed := make(chan struct{})
 			go func() {
@@ -294,8 +294,8 @@ var _ = Describe("Client", func() {
 				_ *Config,
 				_ protocol.VersionNumber,
 				_ []protocol.VersionNumber,
-			) (packetHandler, <-chan handshakeEvent, error) {
-				return nil, nil, testErr
+			) (packetHandler, error) {
+				return nil, testErr
 			}
 			_, err := DialNonFWSecure(packetConn, addr, "quic.clemente.io:1337", nil, config)
 			Expect(err).To(MatchError(testErr))
@@ -337,7 +337,7 @@ var _ = Describe("Client", func() {
 					_ *Config,
 					initialVersionP protocol.VersionNumber,
 					negotiatedVersionsP []protocol.VersionNumber,
-				) (packetHandler, <-chan handshakeEvent, error) {
+				) (packetHandler, error) {
 					initialVersion = initialVersionP
 					negotiatedVersions = negotiatedVersionsP
 					// make the server accept the new version
@@ -345,11 +345,12 @@ var _ = Describe("Client", func() {
 						packetConn.dataToRead = acceptClientVersionPacket(connectionID)
 					}
 					sess := &mockSession{
-						connectionID: connectionID,
-						stopRunLoop:  make(chan struct{}),
+						connectionID:  connectionID,
+						stopRunLoop:   make(chan struct{}),
+						handshakeChan: handshakeChan,
 					}
 					sessionChan <- sess
-					return sess, handshakeChan, nil
+					return sess, nil
 				}
 
 				established := make(chan struct{})
@@ -387,9 +388,9 @@ var _ = Describe("Client", func() {
 					_ *Config,
 					_ protocol.VersionNumber,
 					_ []protocol.VersionNumber,
-				) (packetHandler, <-chan handshakeEvent, error) {
+				) (packetHandler, error) {
 					atomic.AddUint32(&sessionCounter, 1)
-					return sess, nil, nil
+					return sess, nil
 				}
 				go cl.establishSecureConnection()
 				Eventually(func() uint32 { return atomic.LoadUint32(&sessionCounter) }).Should(BeEquivalentTo(1))
@@ -488,13 +489,13 @@ var _ = Describe("Client", func() {
 			configP *Config,
 			_ protocol.VersionNumber,
 			_ []protocol.VersionNumber,
-		) (packetHandler, <-chan handshakeEvent, error) {
+		) (packetHandler, error) {
 			cconn = connP
 			hostname = hostnameP
 			version = versionP
 			conf = configP
 			close(c)
-			return sess, nil, nil
+			return sess, nil
 		}
 		dialed := make(chan struct{})
 		go func() {
