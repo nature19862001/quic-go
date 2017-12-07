@@ -51,7 +51,7 @@ func (f *streamFramer) HasFramesForRetransmission() bool {
 }
 
 func (f *streamFramer) HasCryptoStreamFrame() bool {
-	return f.cryptoStream.LenOfDataForWriting() > 0
+	return f.cryptoStream.HasDataForWriting()
 }
 
 // TODO(lclemente): This is somewhat duplicate with the normal path for generating frames.
@@ -113,7 +113,7 @@ func (f *streamFramer) maybePopNormalFrames(maxBytes protocol.ByteCount) (res []
 		maxLen := maxBytes - currentLen - frameHeaderBytes
 
 		var data []byte
-		if s.LenOfDataForWriting() > 0 {
+		if s.HasDataForWriting() {
 			data = s.GetDataForWriting(maxLen)
 		}
 
