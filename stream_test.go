@@ -9,6 +9,7 @@ import (
 
 	"os"
 
+	"github.com/golang/mock/gomock"
 	"github.com/lucas-clemente/quic-go/internal/mocks"
 	"github.com/lucas-clemente/quic-go/internal/protocol"
 	"github.com/lucas-clemente/quic-go/internal/wire"
@@ -611,7 +612,7 @@ var _ = Describe("Stream", func() {
 					close(done)
 				}()
 
-				Eventually(func() []byte { return str.GetDataForWriting(4) }).ShouldNot(BeEmpty())
+				Eventually(func() []byte { data, _ := str.GetDataForWriting(4); return data }).ShouldNot(BeEmpty())
 				str.RegisterRemoteError(testErr, 10)
 				Eventually(done).Should(BeClosed())
 			})
@@ -769,8 +770,9 @@ var _ = Describe("Stream", func() {
 			Consistently(done).ShouldNot(BeClosed())
 			Expect(onDataCalled).To(BeTrue())
 			Expect(str.HasDataForWriting()).To(BeTrue())
-			data := str.GetDataForWriting(1000)
+			data, sendFin := str.GetDataForWriting(1000)
 			Expect(data).To(Equal([]byte("foobar")))
+			Expect(sendFin).To(BeFalse())
 			Expect(str.writeOffset).To(Equal(protocol.ByteCount(6)))
 			Expect(str.dataForWriting).To(BeNil())
 			Eventually(done).Should(BeClosed())
@@ -794,13 +796,15 @@ var _ = Describe("Stream", func() {
 			}).Should(Equal([]byte("foobar")))
 			Consistently(done).ShouldNot(BeClosed())
 			Expect(str.HasDataForWriting()).To(BeTrue())
-			data := str.GetDataForWriting(3)
+			data, sendFin := str.GetDataForWriting(3)
 			Expect(data).To(Equal([]byte("foo")))
+			Expect(sendFin).To(BeFalse())
 			Expect(str.writeOffset).To(Equal(protocol.ByteCount(3)))
 			Expect(str.dataForWriting).ToNot(BeNil())
 			Expect(str.HasDataForWriting()).To(BeTrue())
-			data = str.GetDataForWriting(3)
+			data, sendFin = str.GetDataForWriting(3)
 			Expect(data).To(Equal([]byte("bar")))
+			Expect(sendFin).To(BeFalse())
 			Expect(str.writeOffset).To(Equal(protocol.ByteCount(6)))
 			Expect(str.dataForWriting).To(BeNil())
 			Expect(str.HasDataForWriting()).To(BeFalse())
@@ -899,11 +903,6 @@ var _ = Describe("Stream", func() {
 		})
 
 		Context("closing", func() {
-			It("sets finishedWriting when calling Close", func() {
-				str.Close()
-				Expect(str.finishedWriting.Get()).To(BeTrue())
-			})
-
 			It("doesn't allow writes after it has been closed", func() {
 				str.Close()
 				_, err := strWithTimeout.Write([]byte("foobar"))
@@ -912,29 +911,51 @@ var _ = Describe("Stream", func() {
 
 			It("allows FIN", func() {
 				str.Close()
-				Expect(str.ShouldSendFin()).To(BeTrue())
+				Expect(str.HasDataForWriting()).To(BeTrue())
+				data, sendFin := str.GetDataForWriting(1000)
+				Expect(data).To(BeEmpty())
+				Expect(sendFin).To(BeTrue())
 			})
 
 			It("does not allow FIN when there's still data", func() {
+				mockFC.EXPECT().SendWindowSize().Return(protocol.ByteCount(9999)).Times(2)
+				mockFC.EXPECT().AddBytesSent(gomock.Any()).Times(2)
 				str.dataForWriting = []byte("foobar")
 				str.Close()
-				Expect(str.ShouldSendFin()).To(BeFalse())
+				Expect(str.HasDataForWriting()).To(BeTrue())
+				data, sendFin := str.GetDataForWriting(3)
+				Expect(data).To(Equal([]byte("foo")))
+				Expect(sendFin).To(BeFalse())
+				data, sendFin = str.GetDataForWriting(3)
+				Expect(data).To(Equal([]byte("bar")))
+				Expect(sendFin).To(BeTrue())
 			})
 
 			It("does not allow FIN when the stream is not closed", func() {
-				Expect(str.ShouldSendFin()).To(BeFalse())
+				Expect(str.HasDataForWriting()).To(BeFalse())
+				_, sendFin := str.GetDataForWriting(3)
+				Expect(sendFin).To(BeFalse())
 			})
 
 			It("does not allow FIN after an error", func() {
 				str.Cancel(errors.New("test"))
-				Expect(str.ShouldSendFin()).To(BeFalse())
+				Expect(str.HasDataForWriting()).To(BeFalse())
+				data, sendFin := str.GetDataForWriting(1000)
+				Expect(data).To(BeEmpty())
+				Expect(sendFin).To(BeFalse())
 			})
 
 			It("does not allow FIN twice", func() {
 				str.Close()
-				Expect(str.ShouldSendFin()).To(BeTrue())
+				Expect(str.HasDataForWriting()).To(BeTrue())
+				data, sendFin := str.GetDataForWriting(1000)
+				Expect(data).To(BeEmpty())
+				Expect(sendFin).To(BeTrue())
 				str.SentFin()
-				Expect(str.ShouldSendFin()).To(BeFalse())
+				Expect(str.HasDataForWriting()).To(BeFalse())
+				data, sendFin = str.GetDataForWriting(1000)
+				Expect(data).To(BeEmpty())
+				Expect(sendFin).To(BeFalse())
 			})
 		})
 
@@ -957,8 +978,9 @@ var _ = Describe("Stream", func() {
 				Eventually(func() []byte { return str.dataForWriting }).ShouldNot(BeNil())
 				Expect(str.HasDataForWriting()).To(BeTrue())
 				str.Cancel(testErr)
-				data := str.GetDataForWriting(6)
+				data, sendFin := str.GetDataForWriting(6)
 				Expect(data).To(BeNil())
+				Expect(sendFin).To(BeFalse())
 				Expect(str.HasDataForWriting()).To(BeFalse())
 			})
 		})
